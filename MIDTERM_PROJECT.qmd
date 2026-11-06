@@ -1,0 +1,689 @@
+---
+title: "MIDTERM_PROJECT"
+author: "ISIMBI Ines"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    embed-resources: true
+editor: visual
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+# World population trends and CO₂ emissions
+
+This project explores global population patterns and country-level carbon dioxide (CO₂) emissions. It includes data inspection, cleaning, missing-value treatment, descriptive analysis, visualizations, correlation analysis, regression, and continental comparisons.
+
+## Before you render
+
+Place both CSV files in a folder named `data` in the same project directory as this `.qmd` file:
+
+- `data/world_population.csv`
+- `data/CO2_emission.csv`
+
+The analysis uses the country codes to match the two datasets. Keep the original column names because the code refers to columns such as `X2022.Population`, `CCA3`, `country_code`, and `X2019`.
+
+## Setup and package loading
+
+```{r}
+library(ggplot2)
+library(knitr)
+```
+
+## Data import
+
+```{r}
+population_raw <- read.csv(
+  "C:\\Users\\100060\\OneDrive - AIF Rwanda\\Isimbi, Ines\\Downloads\\world_population.csv",
+  check.names = TRUE
+)
+
+co2_raw <- read.csv(
+  "C:\\Users\\100060\\OneDrive - AIF Rwanda\\Isimbi, Ines\\Downloads\\CO2_emission.csv",
+  check.names = TRUE
+)
+
+cat(
+  "Population dataset:",
+  nrow(population_raw), "rows and",
+  ncol(population_raw), "columns\n"
+)
+cat(
+  "CO2 dataset:",
+  nrow(co2_raw), "rows and",
+  ncol(co2_raw), "columns\n"
+)
+
+cat("Population columns:\n")
+print(names(population_raw))
+
+cat("CO2 columns:\n")
+print(names(co2_raw))
+
+knitr::kable(
+  head(population_raw, 5),
+  caption = "First five rows of the population dataset"
+)
+
+knitr::kable(
+  tail(population_raw, 10),
+  caption = "Last ten rows of the population dataset"
+)
+
+str(population_raw)
+```
+
+## Data quality assessment
+
+```{data_quality <- data.frame(}
+  Dataset = c("Population", "CO2"),
+  Rows = c(nrow(population_raw), nrow(co2_raw)),
+  Columns = c(ncol(population_raw), ncol(co2_raw)),
+  Duplicate_rows = c(
+    sum(duplicated(population_raw)),
+    sum(duplicated(co2_raw))
+  ),
+  Missing_cells = c(
+    sum(is.na(population_raw)),
+    sum(is.na(co2_raw))
+  )
+)
+
+knitr::kable(
+  data_quality,
+  caption = "Initial data quality summary"
+)
+
+population_missing <- data.frame(
+  Variable = names(population_raw),
+  Missing_values = colSums(is.na(population_raw))
+)
+
+co2_missing <- data.frame(
+  Variable = names(co2_raw),
+  Missing_values = colSums(is.na(co2_raw))
+)
+
+knitr::kable(
+  population_missing,
+  caption = "Missing values in the population dataset"
+)
+
+knitr::kable(
+  co2_missing,
+  caption = "Missing values in the CO2 dataset"
+)
+```
+
+## Data cleaning and missing-value treatment
+
+```{r}
+# Remove duplicate rows and, if identical, the extra 2019 CO2 column.
+population_clean <- unique(population_raw)
+co2_clean <- unique(co2_raw)
+
+if ("X2019.1" %in% names(co2_clean)) {
+  if (identical(co2_clean$X2019, co2_clean$X2019.1)) {
+    co2_clean$X2019.1 <- NULL
+  }
+}
+
+co2_years <- 1990:2019
+co2_columns <- paste0("X", co2_years)
+
+# Fill only short gaps between known CO2 values.
+# Longer gaps and missing values at the beginning or end of a series remain missing.
+fill_short_gaps <- function(values, max_gap = 2) {
+  values <- as.numeric(values)
+  known_positions <- which(!is.na(values))
+
+  if (length(known_positions) < 2) {
+    return(values)
+  }
+
+  estimated_values <- approx(
+    x = known_positions,
+    y = values[known_positions],
+    xout = seq_along(values),
+    rule = 1
+  )$y
+
+  missing_positions <- which(is.na(values))
+
+  if (length(missing_positions) == 0) {
+    return(values)
+  }
+
+  missing_groups <- split(
+    missing_positions,
+    cumsum(c(1, diff(missing_positions) != 1))
+  )
+
+  for (group in missing_groups) {
+    is_short_gap <- length(group) <= max_gap
+    is_between_known_values <- (
+      min(group) > min(known_positions) &&
+      max(group) < max(known_positions)
+    )
+
+    if (is_short_gap && is_between_known_values) {
+      values[group] <- estimated_values[group]
+    }
+  }
+
+  values
+}
+
+co2_interpolated <- co2_clean
+
+co2_interpolated[co2_columns] <- t(
+  apply(co2_clean[co2_columns], 1, fill_short_gaps)
+)
+
+missing_before <- sum(is.na(co2_clean[co2_columns]))
+missing_after <- sum(is.na(co2_interpolated[co2_columns]))
+estimated_count <- missing_before - missing_after
+
+cat("Missing annual CO2 values before interpolation:", missing_before, "\n")
+cat("Missing annual CO2 values after interpolation:", missing_after, "\n")
+cat("Values estimated through interpolation:", estimated_count, "\n")
+```
+
+## Outlier analysis
+
+```{r}
+population_numeric <- population_clean[
+  sapply(population_clean, is.numeric)
+]
+
+# Rank represents position, not a measured quantity, so it is excluded.
+population_numeric$Rank <- NULL
+
+outlier_summary <- data.frame(
+  Variable = names(population_numeric),
+  Potential_outliers = sapply(
+    population_numeric,
+    function(values) length(boxplot.stats(values)$out)
+  )
+)
+
+knitr::kable(
+  outlier_summary,
+  caption = "Potential population outliers based on the IQR rule"
+)
+
+for (variable in names(population_numeric)) {
+  print(
+    ggplot(population_numeric, aes(y = .data[[variable]])) +
+      geom_boxplot(
+        fill = "lightblue",
+        outlier.color = "firebrick"
+      ) +
+      labs(
+        title = paste("Population data:", variable),
+        x = NULL,
+        y = variable
+      ) +
+      theme_minimal()
+  )
+}
+```
+
+## CO₂ emissions distribution
+
+```{r}
+ggplot(co2_clean, aes(y = X2019)) +
+  geom_boxplot(
+    fill = "lightgreen",
+    na.rm = TRUE,
+    outlier.color = "firebrick"
+  ) +
+  labs(
+    title = "CO2 emissions per person in 2019",
+    x = NULL,
+    y = "Metric tons per person"
+  ) +
+  theme_minimal()
+```
+
+## Descriptive statistics
+
+```{r}
+area_column <- grep("^Area", names(population_clean), value = TRUE)[1]
+density_column <- grep("^Density", names(population_clean), value = TRUE)[1]
+
+summary(
+  population_clean[
+    c(
+      "X2022.Population",
+      area_column,
+      density_column,
+      "Growth.Rate",
+      "World.Population.Percentage"
+    )
+  ]
+)
+
+summary(co2_clean$X2019)
+```
+
+## Population projection for 2030
+
+```{r}
+# This assumes the annual growth rate stays constant from 2022 to 2030.
+population_2022 <- population_clean$X2022.Population
+annual_growth_rate <- log(population_clean$Growth.Rate)
+years_to_2030 <- 8
+
+population_clean$Population_2030 <- round(
+  population_2022 * exp(annual_growth_rate * years_to_2030)
+)
+
+knitr::kable(
+  head(
+    population_clean[
+      ,
+      c(
+        "Country.Territory",
+        "X2022.Population",
+        "Population_2030"
+      )
+    ],
+    15
+  ),
+  caption = "Estimated 2030 population for the first 15 countries"
+)
+```
+
+## Ten most populous countries
+
+```{r}
+top_ten <- head(
+  population_clean[
+    order(-population_clean$X2022.Population),
+  ],
+  10
+)
+
+knitr::kable(
+  top_ten[
+    ,
+    c("Country.Territory", "X2022.Population")
+  ],
+  caption = "Ten most populous countries in 2022"
+)
+
+ggplot(
+  top_ten,
+  aes(
+    x = reorder(Country.Territory, X2022.Population),
+    y = X2022.Population
+  )
+) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Ten most populous countries in 2022",
+    x = "Country",
+    y = "Population"
+  ) +
+  theme_minimal()
+```
+
+## Population trends over time
+
+```{r}
+population_years <- c(1990, 2000, 2010, 2015, 2020, 2022)
+
+population_long <- do.call(
+  rbind,
+  lapply(
+    population_years,
+    function(year) {
+      data.frame(
+        Country = top_ten$Country.Territory,
+        Year = year,
+        Population = top_ten[[paste0("X", year, ".Population")]]
+      )
+    }
+  )
+)
+
+ggplot(
+  population_long,
+  aes(
+    x = Year,
+    y = Population,
+    color = Country,
+    group = Country
+  )
+) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 1.2) +
+  scale_x_continuous(breaks = population_years) +
+  labs(
+    title = "Population trends in the ten most populous countries",
+    subtitle = "Lines connect the available benchmark years",
+    x = "Year",
+    y = "Population",
+    color = "Country"
+  ) +
+  theme_minimal()
+```
+
+## Combining population and CO₂ datasets
+
+```{r}
+merged_data <- merge(
+  population_clean,
+  co2_clean,
+  by.x = "CCA3",
+  by.y = "country_code",
+  all.x = TRUE
+)
+
+merged_interpolated <- merge(
+  population_clean,
+  co2_interpolated,
+  by.x = "CCA3",
+  by.y = "country_code",
+  all.x = TRUE
+)
+
+unmatched_count <- sum(
+  is.na(merged_data$X1990) &
+    is.na(merged_data$Country.Name)
+)
+
+cat(
+  "Population rows without a matching CO2 country code:",
+  unmatched_count,
+  "\n"
+)
+```
+
+## CO₂ emissions trends
+
+```{r}
+co2_top_ten <- merged_data[
+  merged_data$CCA3 %in% top_ten$CCA3,
+]
+
+co2_long <- do.call(
+  rbind,
+  lapply(
+    co2_years,
+    function(year) {
+      data.frame(
+        Country = co2_top_ten$Country.Territory,
+        Year = year,
+        CO2_per_person = co2_top_ten[[paste0("X", year)]]
+      )
+    }
+  )
+)
+
+ggplot(
+  co2_long,
+  aes(
+    x = Year,
+    y = CO2_per_person,
+    color = Country,
+    group = Country
+  )
+) +
+  geom_line(linewidth = 0.8, na.rm = TRUE) +
+  labs(
+    title = "CO2 emissions per person in the ten most populous countries",
+    subtitle = "Missing observations are shown as gaps, not zeros",
+    x = "Year",
+    y = "Metric tons per person",
+    color = "Country"
+  ) +
+  theme_minimal()
+```
+
+## Interpolation assessment
+
+```{r}
+observed_top_ten <- co2_clean[
+  co2_clean$country_code %in% top_ten$CCA3,
+]
+
+interpolated_top_ten <- co2_interpolated[
+  co2_interpolated$country_code %in% top_ten$CCA3,
+]
+
+cat(
+  "Missing top-ten country-year values before interpolation:",
+  sum(is.na(observed_top_ten[co2_columns])),
+  "\n"
+)
+
+cat(
+  "Missing top-ten country-year values after interpolation:",
+  sum(is.na(interpolated_top_ten[co2_columns])),
+  "\n"
+)
+```
+
+## Correlation analysis
+
+```{r}
+correlation_columns <- c(
+  area_column,
+  density_column,
+  "Growth.Rate",
+  "World.Population.Percentage"
+)
+
+correlation_matrix <- cor(
+  population_clean[correlation_columns],
+  use = "complete.obs"
+)
+
+knitr::kable(
+  round(correlation_matrix, 3),
+  caption = "Pearson correlations among population characteristics"
+)
+
+correlation_long <- as.data.frame(as.table(correlation_matrix))
+names(correlation_long) <- c("Variable_1", "Variable_2", "Correlation")
+
+ggplot(
+  correlation_long,
+  aes(
+    x = Variable_1,
+    y = Variable_2,
+    fill = Correlation
+  )
+) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = sprintf("%.2f", Correlation)), size = 3) +
+  scale_fill_gradient2(
+    low = "steelblue",
+    mid = "white",
+    high = "firebrick",
+    midpoint = 0,
+    limits = c(-1, 1)
+  ) +
+  coord_equal() +
+  labs(
+    title = "Correlations among population characteristics",
+    x = NULL,
+    y = NULL,
+    fill = "Correlation"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 40, hjust = 1))
+```
+
+## Population and CO₂ relationship
+
+```{r}
+paired_data <- merged_data[
+  complete.cases(
+    merged_data[
+      ,
+      c("X2022.Population", "X2019")
+    ]
+  ),
+]
+
+cat("Countries included in the comparison:", nrow(paired_data), "\n")
+cat(
+  "Pearson correlation:",
+  cor(paired_data$X2022.Population, paired_data$X2019),
+  "\n"
+)
+cat(
+  "Spearman correlation:",
+  cor(
+    paired_data$X2022.Population,
+    paired_data$X2019,
+    method = "spearman"
+  ),
+  "\n"
+)
+
+population_co2_model <- lm(
+  X2019 ~ X2022.Population,
+  data = paired_data
+)
+
+summary(population_co2_model)
+
+ggplot(
+  paired_data,
+  aes(x = X2022.Population, y = X2019)
+) +
+  geom_point(alpha = 0.6, color = "steelblue") +
+  geom_smooth(
+    method = "lm",
+    se = TRUE,
+    color = "firebrick"
+  ) +
+  labs(
+    title = "2022 population and 2019 CO2 emissions per person",
+    x = "Population in 2022",
+    y = "CO2 emissions in 2019 (metric tons per person)"
+  ) +
+  theme_minimal()
+```
+
+## Regression diagnostics and comparison
+
+```{r}
+par(mfrow = c(1, 2))
+plot(population_co2_model, which = 1)
+plot(population_co2_model, which = 2)
+par(mfrow = c(1, 1))
+
+paired_interpolated <- merged_interpolated[
+  complete.cases(
+    merged_interpolated[
+      ,
+      c("X2022.Population", "X2019")
+    ]
+  ),
+]
+
+cat(
+  "Pearson correlation using observed CO2 values:",
+  cor(paired_data$X2022.Population, paired_data$X2019),
+  "\n"
+)
+
+cat(
+  "Pearson correlation using interpolated CO2 values:",
+  cor(
+    paired_interpolated$X2022.Population,
+    paired_interpolated$X2019
+  ),
+  "\n"
+)
+```
+
+## Continental comparison
+
+```{r}
+# These summaries are not total continental emissions.
+continent_sum <- aggregate(
+  X2019 ~ Continent,
+  data = paired_data,
+  sum
+)
+
+continent_mean <- aggregate(
+  X2019 ~ Continent,
+  data = paired_data,
+  mean
+)
+
+continent_count <- aggregate(
+  X2019 ~ Continent,
+  data = paired_data,
+  length
+)
+
+continent_summary <- Reduce(
+  function(first, second) merge(first, second, by = "Continent"),
+  list(continent_sum, continent_mean, continent_count)
+)
+
+names(continent_summary) <- c(
+  "Continent",
+  "Sum_of_country_values",
+  "Mean_of_country_values",
+  "Countries_observed"
+)
+
+continent_summary <- continent_summary[
+  order(-continent_summary$Sum_of_country_values),
+]
+
+knitr::kable(
+  continent_summary,
+  digits = 3,
+  caption = "Country-level CO2-per-person indicators by continent in 2019"
+)
+
+ggplot(
+  continent_summary,
+  aes(
+    x = reorder(Continent, Sum_of_country_values),
+    y = Sum_of_country_values
+  )
+) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Sum of country-level CO2-per-person values by continent",
+    subtitle = "This is not a measure of total continental emissions",
+    x = "Continent",
+    y = "Sum of country-level values"
+  ) +
+  theme_minimal()
+
+cat("Highest value:", continent_summary$Continent[1], "\n")
+cat(
+  "Third-highest value:",
+  continent_summary$Continent[3],
+  "—",
+  continent_summary$Sum_of_country_values[3],
+  "\n"
+)
+cat(
+  "Lowest value:",
+  tail(continent_summary$Continent, 1),
+  "—",
+  tail(continent_summary$Sum_of_country_values, 1),
+  "\n"
+)
+```
+
