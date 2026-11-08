@@ -19,12 +19,12 @@ execute:
 
 This project explores global population patterns and country-level carbon dioxide (CO₂) emissions. It includes data inspection, cleaning, missing-value treatment, descriptive analysis, visualizations, correlation analysis, regression, and continental comparisons.
 
-## Before you render
+## Before rendering
 
-Place both CSV files in a folder named `data` in the same project directory as this `.qmd` file:
+I placed both CSV files in a folder named `data` in the same project directory as this `.qmd` file:
 
-- `data/world_population.csv`
-- `data/CO2_emission.csv`
+- `C:\\Users\\100060\\OneDrive - AIF Rwanda\\Isimbi, Ines\\Downloads\\world_population.csv`
+- `C:\\Users\\100060\\OneDrive - AIF Rwanda\\Isimbi, Ines\\Downloads\\CO2_emission.csv`
 
 The analysis uses the country codes to match the two datasets. Keep the original column names because the code refers to columns such as `X2022.Population`, `CCA3`, `country_code`, and `X2019`.
 
@@ -80,7 +80,8 @@ str(population_raw)
 
 ## Data quality assessment
 
-```{data_quality <- data.frame(}
+```{r}
+data_quality <- data.frame(
   Dataset = c("Population", "CO2"),
   Rows = c(nrow(population_raw), nrow(co2_raw)),
   Columns = c(ncol(population_raw), ncol(co2_raw)),
@@ -686,4 +687,3 @@ cat(
   "\n"
 )
 ```
-

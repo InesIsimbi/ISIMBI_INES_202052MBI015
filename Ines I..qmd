@@ -1,0 +1,144 @@
+---
+title: "R GRAPHS"
+author: "Ines"
+format: html
+editor: visual
+---
+# ============================================================
+# Population Growth and CO2 Emissions - all figures for the report
+# Output files match the names expected by Population_CO2_Report.tex
+# Put the two CSV files in the working directory (or edit the paths).
+# ============================================================
+
+pkgs <- c("ggplot2", "dplyr", "tidyr", "scales", "reshape2")
+for (p in pkgs) if (!requireNamespace(p, quietly = TRUE)) install.packages(p)
+library(ggplot2); library(dplyr); library(tidyr); library(scales); library(reshape2)
+
+# ---------- 1. Import ----------
+pop <- read.csv("C:\\Users\\100060\\OneDrive - AIF Rwanda\\Isimbi, Ines\\Downloads\\world_population.csv", check.names = TRUE)
+co2 <- read.csv("C:\Users\\100060\\OneDrive - AIF Rwanda\\Isimbi, Ines\\Downloads\\CO2_emission.csv", check.names = TRUE)
+
+# ---------- 2. Cleaning ----------
+pop <- unique(pop)
+co2 <- unique(co2)
+# drop the duplicated 2019 column only if identical
+if ("X2019.1" %in% names(co2) &&
+    isTRUE(all.equal(co2$X2019, co2$X2019.1))) co2$X2019.1 <- NULL
+
+year_cols <- paste0("X", 1990:2019)
+
+# Fill only short INTERNAL gaps (<= 2 consecutive NAs) by linear interpolation
+fill_short_gaps <- function(v, max_gap = 2) {
+  n <- length(v); i <- 1
+  while (i <= n) {
+    if (is.na(v[i])) {
+      j <- i
+      while (j <= n && is.na(v[j])) j <- j + 1
+      if (i > 1 && j <= n && (j - i) <= max_gap) {
+        v[i:(j - 1)] <- approx(c(i - 1, j), c(v[i - 1], v[j]), xout = i:(j - 1))$y
+      }
+      i <- j
+    } else i <- i + 1
+  }
+  v
+}
+co2_i <- co2
+co2_i[year_cols] <- t(apply(co2[year_cols], 1, fill_short_gaps))
+
+# ---------- 3. Merge ----------
+m  <- left_join(pop, co2[,   c("country_code", year_cols)], by = c("CCA3" = "country_code"))
+mi <- left_join(pop, co2_i[, c("country_code", year_cols)], by = c("CCA3" = "country_code"))
+
+# ---------- 4. Top 10 ----------
+top10 <- pop %>% arrange(desc(X2022.Population)) %>% slice(1:10)
+
+theme_set(theme_minimal(base_size = 11) +
+            theme(panel.grid.minor = element_blank(),
+                  legend.position = "right"))
+
+# ---------- Fig 1: top10_bar.png ----------
+p1 <- ggplot(top10, aes(x = reorder(Country.Territory, X2022.Population),
+                        y = X2022.Population / 1e6)) +
+  geom_col(fill = "#2a6f97") +
+  geom_text(aes(label = comma(round(X2022.Population / 1e6))), hjust = -0.1, size = 3) +
+  coord_flip() + expand_limits(y = 1700) +
+  labs(x = NULL, y = "Population 2022 (millions)")
+ggsave("top10_bar.png", p1, width = 6, height = 4.2, dpi = 200)
+
+# ---------- Fig 2: trend_population.png ----------
+pop_long <- top10 %>%
+  select(Country.Territory, X1990.Population, X2000.Population, X2010.Population,
+         X2015.Population, X2020.Population, X2022.Population) %>%
+  pivot_longer(-Country.Territory, names_to = "Year", values_to = "Population") %>%
+  mutate(Year = as.numeric(gsub("X|\\.Population", "", Year)))
+p2 <- ggplot(pop_long, aes(Year, Population / 1e6, colour = Country.Territory)) +
+  geom_line(linewidth = 0.8) + geom_point(size = 1.5) +
+  scale_x_continuous(breaks = c(1990, 2000, 2010, 2015, 2020, 2022)) +
+  labs(x = "Year", y = "Population (millions)", colour = NULL)
+ggsave("trend_population.png", p2, width = 6, height = 4.2, dpi = 200)
+
+# ---------- Fig 3: co2_trend.png (interpolated series, gaps stay NA) ----------
+co2_top <- mi %>% filter(CCA3 %in% top10$CCA3) %>%
+  select(Country.Territory, all_of(year_cols)) %>%
+  pivot_longer(-Country.Territory, names_to = "Year", values_to = "CO2") %>%
+  mutate(Year = as.numeric(sub("X", "", Year)))
+p3 <- ggplot(co2_top, aes(Year, CO2, colour = Country.Territory)) +
+  geom_line(linewidth = 0.8, na.rm = TRUE) +
+  labs(x = "Year", y = expression(CO[2]~"per person (t)"), colour = NULL)
+ggsave("co2_trend.png", p3, width = 6, height = 4.2, dpi = 200)
+
+# ---------- Fig 4: corr_heatmap.png ----------
+cm <- cor(pop[, c("Area..km..", "Density..per.km..", "Growth.Rate",
+                  "World.Population.Percentage")], use = "complete.obs")
+colnames(cm) <- rownames(cm) <- c("Area", "Density", "Growth rate", "World %")
+cm_long <- melt(cm)
+p4 <- ggplot(cm_long, aes(Var1, Var2, fill = value)) +
+  geom_tile(colour = "white") +
+  geom_text(aes(label = sprintf("%.2f", value)), size = 3.5) +
+  scale_fill_gradient2(low = "#b2182b", mid = "white", high = "#2166ac",
+                       midpoint = 0, limits = c(-1, 1)) +
+  labs(x = NULL, y = NULL, fill = "r") + coord_fixed()
+ggsave("corr_heatmap.png", p4, width = 4.6, height = 4, dpi = 200)
+
+# ---------- Fig 5: scatter_pop_co2pc.png + regression ----------
+d <- m %>% filter(!is.na(X2022.Population), !is.na(X2019))
+fit <- lm(X2019 ~ X2022.Population, data = d)
+print(summary(fit))
+cat("Pearson :"); print(cor.test(d$X2022.Population, d$X2019, method = "pearson"))
+cat("Spearman:"); print(cor.test(d$X2022.Population, d$X2019, method = "spearman", exact = FALSE))
+
+lab <- d %>% filter(Country.Territory %in% c("China", "India", "United States", "Qatar", "Indonesia"))
+p5 <- ggplot(d, aes(X2022.Population / 1e6, X2019)) +
+  geom_point(alpha = 0.7, colour = "#2a6f97") +
+  geom_smooth(method = "lm", se = FALSE, colour = "crimson") +
+  geom_text(data = lab, aes(label = Country.Territory), size = 2.8,
+            hjust = -0.1, vjust = -0.5) +
+  labs(x = "Population 2022 (millions)", y = expression(CO[2]~"per person 2019 (t)"))
+ggsave("scatter_pop_co2pc.png", p5, width = 6.2, height = 4.2, dpi = 200)
+
+# ---------- Fig 6: diagnostics.png (residuals vs fitted + Q-Q) ----------
+png("diagnostics.png", width = 7, height = 3.2, units = "in", res = 200)
+par(mfrow = c(1, 2), mar = c(4, 4, 1, 1))
+plot(fitted(fit), resid(fit), pch = 16, cex = 0.6, col = "#2a6f97",
+     xlab = "Fitted", ylab = "Residuals"); abline(h = 0, col = "crimson")
+qqnorm(resid(fit), main = "", pch = 16, cex = 0.6, col = "#2a6f97"); qqline(resid(fit), col = "crimson")
+dev.off()
+
+# ---------- Fig 7: boxplots.png ----------
+png("boxplots.png", width = 7, height = 3.2, units = "in", res = 200)
+par(mfrow = c(1, 2), mar = c(4, 2, 1, 1))
+boxplot(pop$X2022.Population / 1e6, horizontal = TRUE, xlab = "Population 2022 (millions)")
+boxplot(co2$X2019, horizontal = TRUE, xlab = expression(CO[2]~"per person 2019 (t)"))
+dev.off()
+
+# ---------- Fig 8: continent_co2.png ----------
+cont <- d %>% group_by(Continent) %>%
+  summarise(Sum = sum(X2019), Mean = mean(X2019), N = n()) %>% arrange(desc(Sum))
+print(cont)
+p8 <- ggplot(cont, aes(reorder(Continent, -Sum), Sum)) +
+  geom_col(fill = "#2a6f97") +
+  labs(x = NULL, y = expression("Sum of country-level"~CO[2]~"per person (t)")) +
+  theme(axis.text.x = element_text(angle = 25, hjust = 1))
+ggsave("continent_co2.png", p8, width = 6, height = 3.8, dpi = 200)
+
+cat("\nAll figures saved in:", getwd(), "\n")
