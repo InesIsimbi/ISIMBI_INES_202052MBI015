@@ -31,7 +31,10 @@ The analysis uses the country codes to match the two datasets. Keep the original
 ## Setup and package loading
 
 ```{r}
-install.packages("ggplot2")
+# Install ggplot2 if it is not already installed
+if (!requireNamespace("ggplot2", quietly = TRUE)) {
+  install.packages("ggplot2", repos = "https://cloud.r-project.org")
+}
 library(ggplot2)
 library(knitr)
 ```
